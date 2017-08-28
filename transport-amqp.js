@@ -128,10 +128,11 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
     return descriptor;
   }
 
-  function bind(address, callback) {
+  function bind(address, callback, bindOptions) {
     var descriptor = addDescriptor(address, callback);
+    descriptor.bindOptions = bindOptions;
     debug('bind', 'Binding endpoint; address = ', address, ', ep = ', descriptor.ep, '.');
-    return bindInternal(descriptor)
+    return bindInternal(descriptor);
   }
 
   function bindInternal(descriptor) {
@@ -367,6 +368,11 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
                 reply: mc.properties.replyTo ? getReplyFn(mc) : undefined,
                 replyContext: descriptor.isReply ? descriptor : undefined
               });
+              if (descriptor.bindOptions && descriptor.bindOptions.logger && descriptor.bindOptions.logger.addContext) {
+                if (mc.properties.tracking) {
+                  descriptor.bindOptions.logger.addContext('tracking', mc.properties.tracking);
+                }
+              }
               return descriptor.callback(dmc, descriptor);
             });
           });
