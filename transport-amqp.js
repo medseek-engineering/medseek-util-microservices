@@ -499,6 +499,15 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
           console.error(err);
           process.exit(1);
         });
+        connection.on('close', function(reason){
+          me.emit('warn', reason);
+        });
+        connection.on('blocked', function(reason){
+          me.emit('warn', reason);
+        });
+        connection.on('unblocked', function(){
+          me.emit('ready');
+        });
       })
       .catch(onError);
   }
