@@ -364,15 +364,17 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
           }
           return Promise.map(matches, function (descriptor) {
             return Promise.try(function () {
+              if (descriptor.bindOptions && descriptor.bindOptions.logger) {
+                mc.logger = descriptor.bindOptions.logger;
+                mc.logger.info('Received message.', {
+                  routingKey: mc.routingKey,
+                  tracking: mc.properties.tracking
+                });
+              }
               var dmc = _.extend(_.clone(mc), {
                 reply: mc.properties.replyTo ? getReplyFn(mc) : undefined,
                 replyContext: descriptor.isReply ? descriptor : undefined
               });
-              if (descriptor.bindOptions && descriptor.bindOptions.logger && descriptor.bindOptions.logger.addContext) {
-                if (mc.properties.tracking) {
-                  descriptor.bindOptions.logger.addContext('tracking', mc.properties.tracking);
-                }
-              }
               return descriptor.callback(dmc, descriptor);
             });
           });
@@ -390,6 +392,11 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
       properties = _.defaults(properties || {}, _.omit(mc.properties, 'replyTo'));
       var to = properties.replyTo || mc.properties.replyTo;
       debug('reply', 'to: {0}, body = {1}, properties = {2}', to, body, properties);
+      if (mc.logger) {
+        mc.logger.info('Sending reply.', {
+          tracking: mc.properties.tracking
+        });
+      }
       return send(to, body, properties);
     };
   }
