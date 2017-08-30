@@ -128,9 +128,8 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
     return descriptor;
   }
 
-  function bind(address, callback, bindOptions) {
+  function bind(address, callback) {
     var descriptor = addDescriptor(address, callback);
-    descriptor.bindOptions = bindOptions;
     debug('bind', 'Binding endpoint; address = ', address, ', ep = ', descriptor.ep, '.');
     return bindInternal(descriptor);
   }
@@ -224,6 +223,9 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
         if (opts.onGotReplyContext) {
           rc = opts.onGotReplyContext(rc) || rc;
         }
+        me.emit('send-message', {
+          properties: properties
+        });
         var result = Promise
           .try(function () {
             return rc.send(address, body, properties);
@@ -364,9 +366,10 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
           }
           return Promise.map(matches, function (descriptor) {
             return Promise.try(function () {
-              if (descriptor.bindOptions && descriptor.bindOptions.logger) {
-                mc.logger = descriptor.bindOptions.logger;
-                mc.logger.info('Received message.', mc);
+              if (descriptor.isReply) {
+                me.emit('receive-reply', mc);
+              } else {
+                me.emit('receive-message', mc);
               }
               var dmc = _.extend(_.clone(mc), {
                 reply: mc.properties.replyTo ? getReplyFn(mc) : undefined,
@@ -389,9 +392,7 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
       properties = _.defaults(properties || {}, _.omit(mc.properties, 'replyTo'));
       var to = properties.replyTo || mc.properties.replyTo;
       debug('reply', 'to: {0}, body = {1}, properties = {2}', to, body, properties);
-      if (mc.logger) {
-        mc.logger.info('Sending reply.', mc);
-      }
+      me.emit('send-reply', mc);
       return send(to, body, properties);
     };
   }
