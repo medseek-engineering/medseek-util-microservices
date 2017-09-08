@@ -4,6 +4,9 @@ var events = require('events');
 var util = require('util');
 var Transport = require('./transport.js');
 
+var defaultReconnectInterval = 2000;
+var defaultMaxReconnectAttempts = 60;
+
 /**
  * Provides an AMQP transport for the micro-services module.
  *
@@ -23,6 +26,12 @@ util.inherits(AmqpTransport, Transport);
  * @param [options.amqplib] An optional amqplib to use instead of the default module.
  */
 function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
+
+  options = Object.assign({
+    maxReconnectAttempts: defaultMaxReconnectAttempts,
+    reconnectInterval: defaultReconnectInterval
+  }, options);
+
   if (!(this instanceof AmqpTransport)) {
     return new AmqpTransport(options, _, amqplib, Promise, serializer, uuid);
   }
@@ -402,13 +411,8 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
   }
 
   function onError(error) {
-    if (me.listeners('error').length > 0) {
-      debug('Emitting error:', error);
-      return me.emit('error', error);
-    } else {
-      debug('Unhandled error:', error);
-      throw error;
-    }
+    debug('Emitting error:', error);
+    me.emit('error', error);
   }
 
   function parseAddress(value) {
@@ -478,39 +482,96 @@ function AmqpTransport(options, _, amqplib, Promise, serializer, uuid) {
     }
 
     debug('start', 'Broker: ', brokerAddress);
-    return Promise
-      .try(function () {
-        return amqplib.connect(brokerAddress);
-      })
-      .then(function (newConnection) {
-        connection = newConnection;
-        return connection.createChannel();
-      })
-      .then(function (createdChannel) {
-        channel = createdChannel;
-        if (options.channelPrefetch) {
-          return channel.prefetch(options.channelPrefetch);
-        }
-      })
-      .then(function () {
-        debug('start', 'Ready');
-        isReady = true;
-        me.emit('ready');
-        connection.on('error', function (err) {
-          console.error(err);
-          process.exit(1);
+
+    var timeoutId;
+    var failedAttempts = 0;
+
+    return connect();
+
+    function connect() {
+
+      //empty these arrays so exchange and queues get recreated.
+      declaredQueues.length = 0;
+      declaredExchanges.length = 0;
+
+      isReady = false;
+
+      // cancel any other pending attempts that were queued after this attempt.
+      clearTimeout(timeoutId);
+
+      // allow other tries to be queued if this fails.
+      timeoutId = null;
+
+      me.emit('info', 'Connecting to ' + brokerAddress);
+      return Promise
+        .try(function () {
+          return amqplib.connect(brokerAddress);
+        })
+        .tap(function () {
+          me.emit('info', 'Connected to RabbitMQ');
+        })
+        .then(function (newConnection) {
+          connection = newConnection;
+          return connection.createChannel();
+        })
+        .then(function (createdChannel) {
+          channel = createdChannel;
+          if (options.channelPrefetch) {
+            return channel.prefetch(options.channelPrefetch);
+          }
+        })
+        .then(function () {
+          onReady();
+          connection.on('error', function (err) {
+            connection = null;
+            onError(err);
+            tryReconnect();
+          });
+          connection.on('close', function (err) {
+            connection = null;
+            onError(err);
+            tryReconnect();
+          });
+          connection.on('blocked', function (reason) {
+            me.emit('warn', reason);
+          });
+          connection.on('unblocked', function () {
+            me.emit('ready');
+          });
+        })
+        .catch(function (err) {
+          connection = null;
+          onError(err);
+          tryReconnect();
         });
-        connection.on('close', function(reason){
-          me.emit('warn', reason);
-        });
-        connection.on('blocked', function(reason){
-          me.emit('warn', reason);
-        });
-        connection.on('unblocked', function(){
-          me.emit('ready');
-        });
-      })
-      .catch(onError);
+    }
+
+    function onReady(){
+      debug('start', 'Ready');
+      isReady = true;
+      me.emit('ready');
+
+      //reset failed attempts
+      failedAttempts = 0;
+
+      // re-bind all previous bindings
+      descriptors.forEach(bindInternal);
+    }
+
+    function tryReconnect() {
+      failedAttempts++;
+      if (failedAttempts >= (options.maxReconnectAttempts)) {
+        me.emit('error', 'Terminating after ' + failedAttempts + ' failed reconnection attempts to RabbitMQ.');
+        process.exit(1);
+      }
+      // if there is already an attempt queued, don't start another
+      if (timeoutId) {
+        return;
+      }
+      me.emit('info', 'Reconnecting to RabbitMQ in ' + (options.reconnectInterval / 1000) + ' seconds...');
+      timeoutId = setTimeout(connect, options.reconnectInterval);
+    }
+
   }
 
   function stop() {
