@@ -21,3 +21,5 @@ example
 example/*
 test
 test/*
+
+.editorconfig
